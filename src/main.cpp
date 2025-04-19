@@ -28,6 +28,7 @@
 #include "Free_Fonts.h"
 #include "constants.h"
 #include "credentials.h"
+#include "logo.h"
 
 #define BACKLIGHT_PIN 21
 #define INTERCOM_PIN 22
@@ -40,7 +41,7 @@
 #define XPT2046_CS 33   // T_CS
 
 SPIClass mySPI = SPIClass(VSPI);
-XPT2046_Touchscreen ts(XPT2046_CS /*, XPT2046_IRQ*/);
+XPT2046_Touchscreen touchscreen(XPT2046_CS /*, XPT2046_IRQ*/);
 
 TFT_eSPI tft = TFT_eSPI();
 
@@ -52,11 +53,14 @@ char lastTimeReceived[32] = "--:--";
 #define INTERCOM_RINGING "DING DONG"
 char intercomState[32] = INTERCOM_IDLE;
 
+#define UNCALIBRATED TS_Point(-1, -1, 0);
+TS_Point touchPoint;
+TS_Point calibrationTopLeft = UNCALIBRATED;
+TS_Point calibrationTopRight = UNCALIBRATED;
+TS_Point calibrationBottomLeft = UNCALIBRATED;
+TS_Point calibrationBottomRight = UNCALIBRATED;
+
 #define SCREEN_TIMEOUT 1000 * 30
-#define UNTOUCHED 0
-#define TOUCHED 1
-int lastTouchState = UNTOUCHED;
-int currentTouchState;
 
 unsigned long screenTimeout = 0;  // 0 or timestamp when last released
 unsigned long touchStartTime = 0; // 0 or timestamp when pressed
@@ -70,7 +74,7 @@ int currentIntercomState = IDLE;
 Preferences preferences;
 WebServer server(80);
 
-int orientation = 3;
+int orientation = 1;
 
 int launchCount = 0;
 bool calibrated = false;
@@ -123,6 +127,21 @@ void clearDisplay()
   tft.setTextColor(TEXT_COLOUR, BACKGROUND_COLOUR);
 }
 
+// Draw the calibration crosshair at TOP_LEFT, BOTTOM_RIGHT etc...
+void drawCrosshair(int position)
+{
+  bool left = position == TOP_LEFT || position == BOTTOM_LEFT;
+  bool top = position == TOP_LEFT || position == TOP_RIGHT;
+  int32_t xStart = left ? CROSSHAIR_MARGIN : tft.width() - CROSSHAIR_MARGIN - CROSSHAIR_SIZE;
+  int32_t xMiddle = xStart + CROSSHAIR_SIZE / 2;
+  int32_t xEnd = xStart + CROSSHAIR_SIZE;
+  int32_t yStart = top ? CROSSHAIR_MARGIN : tft.height() - CROSSHAIR_MARGIN - CROSSHAIR_SIZE;
+  int32_t yMiddle = yStart + CROSSHAIR_SIZE / 2;
+  int32_t yEnd = yStart + CROSSHAIR_SIZE;
+  tft.drawLine(xStart, yMiddle, xEnd, yMiddle, CROSSHAIR_COLOUR);
+  tft.drawLine(xMiddle, yStart, xMiddle, yEnd, CROSSHAIR_COLOUR);
+}
+
 void updateDisplayLine(int line, const char *text)
 {
   int displayHeight = tft.height();
@@ -138,6 +157,7 @@ void updateDisplayLine(int line, const char *text)
 // display the connection info (and cross hair if calibrating)
 void displayStatus()
 {
+  println("Display status");
   clearDisplay();
   updateDisplayLine(HOSTNAME_LINE, hostname);
   if (WiFi.status() == WL_CONNECTED)
@@ -164,48 +184,107 @@ void displayStatus()
   updateDisplayLine(DING_DONG_LINE, intercomState);
   println(lastTimeReceived);
   updateDisplayLine(CLOCK_LINE, lastTimeReceived);
+  if (calibrating)
+  {
+    drawCrosshair(calibrating);
+    updateDisplayLine(RESET_LINE, "Touch crosshairs!");
+  }
+}
+
+void displayLogo()
+{
+  clearDisplay();
+  tft.pushImage((tft.width() - LOGO_WIDTH)/2, 0, LOGO_WIDTH, LOGO_HEIGHT, logo);
 }
 
 void displayOn()
 {
-  // digitalWrite(BACKLIGHT_PIN, LOW);
-  displayStatus();
+  digitalWrite(BACKLIGHT_PIN, HIGH);
   screenTimeout = millis() + SCREEN_TIMEOUT;
 }
 
 void displayOff()
 {
-  // digitalWrite(BACKLIGHT_PIN, HIGH);
+  digitalWrite(BACKLIGHT_PIN, LOW);
   clearDisplay();
   screenTimeout = 0;
+}
+
+void printCalibrationInfo()
+{
+  char buffer[40];
+  sprintf(buffer, "Cal: %i,%i %i,%i", calibrationTopLeft.x, calibrationTopLeft.y, calibrationTopRight.x, calibrationTopRight.y);
+  println(buffer);
+  sprintf(buffer, "Cal: %i,%i %i,%i", calibrationBottomLeft.x, calibrationBottomLeft.y, calibrationBottomRight.x, calibrationBottomRight.y);
+  println(buffer);
+}
+
+void resetStoredCalibration()
+{
+  preferences.begin(PREFERENCES_NAMESPACE);
+  preferences.putBool(PREFERENCES_KEY_CALIBRATED, false);
+  preferences.putInt(PREFERENCES_KEY_TOP_LEFT_X, -1);
+  preferences.putInt(PREFERENCES_KEY_TOP_LEFT_Y, -1);
+  preferences.putInt(PREFERENCES_KEY_TOP_RIGHT_X, -1);
+  preferences.putInt(PREFERENCES_KEY_TOP_RIGHT_Y, -1);
+  preferences.putInt(PREFERENCES_KEY_BOTTOM_LEFT_X, -1);
+  preferences.putInt(PREFERENCES_KEY_BOTTOM_LEFT_Y, -1);
+  preferences.putInt(PREFERENCES_KEY_BOTTOM_RIGHT_X, -1);
+  preferences.putInt(PREFERENCES_KEY_BOTTOM_RIGHT_Y, -1);
+  preferences.end();
+}
+
+void storeCalibration()
+{
+  preferences.begin(PREFERENCES_NAMESPACE);
+  preferences.putBool(PREFERENCES_KEY_CALIBRATED, true);
+  preferences.putInt(PREFERENCES_KEY_TOP_LEFT_X, calibrationTopLeft.x);
+  preferences.putInt(PREFERENCES_KEY_TOP_LEFT_Y, calibrationTopLeft.y);
+  preferences.putInt(PREFERENCES_KEY_TOP_RIGHT_X, calibrationTopRight.x);
+  preferences.putInt(PREFERENCES_KEY_TOP_RIGHT_Y, calibrationTopRight.y);
+  preferences.putInt(PREFERENCES_KEY_BOTTOM_LEFT_X, calibrationBottomLeft.x);
+  preferences.putInt(PREFERENCES_KEY_BOTTOM_LEFT_Y, calibrationBottomLeft.y);
+  preferences.putInt(PREFERENCES_KEY_BOTTOM_RIGHT_X, calibrationBottomRight.x);
+  preferences.putInt(PREFERENCES_KEY_BOTTOM_RIGHT_Y, calibrationBottomRight.y);
+  preferences.end();
 }
 
 // Load or initialize preferences
 void setupPreferences()
 {
   preferences.begin(PREFERENCES_NAMESPACE);
-  /*
-  if (preferences.isKey(PREFERENCES_KEY_LAUCH_COUNT))
+  if (preferences.isKey(PREFERENCES_KEY_CALIBRATED))
   {
-    launchCount = preferences.getInt(PREFERENCES_KEY_LAUCH_COUNT) + 1;
+    calibrated = preferences.getBool(PREFERENCES_KEY_CALIBRATED);
+    Serial.print("Calibrated: ");
+    Serial.println(calibrated);
   }
   else
   {
-    // first launch
-    launchCount = 1;
+    preferences.putBool(PREFERENCES_KEY_CALIBRATED, false);
   }
-  preferences.putInt(PREFERENCES_KEY_LAUCH_COUNT, launchCount);
-  Serial.print("Launch #");
-  Serial.println(launchCount);
-  if (preferences.isKey(PREFERENCES_KEY_DOUBLE_RESET))
+  if (preferences.isKey(PREFERENCES_KEY_TOP_LEFT_X))
   {
-    isDoubleReset = preferences.getBool(PREFERENCES_KEY_DOUBLE_RESET);
+    // if that key exists all the other should as well
+    int x = preferences.getInt(PREFERENCES_KEY_TOP_LEFT_X);
+    int y = preferences.getInt(PREFERENCES_KEY_TOP_LEFT_Y);
+    calibrationTopLeft = TS_Point(x, y, 0);
+    x = preferences.getInt(PREFERENCES_KEY_TOP_RIGHT_X);
+    y = preferences.getInt(PREFERENCES_KEY_TOP_RIGHT_Y);
+    calibrationTopRight = TS_Point(x, y, 0);
+    x = preferences.getInt(PREFERENCES_KEY_BOTTOM_LEFT_X);
+    y = preferences.getInt(PREFERENCES_KEY_BOTTOM_LEFT_Y);
+    calibrationBottomLeft = TS_Point(x, y, 0);
+    x = preferences.getInt(PREFERENCES_KEY_BOTTOM_RIGHT_X);
+    y = preferences.getInt(PREFERENCES_KEY_BOTTOM_RIGHT_Y);
+    calibrationBottomRight = TS_Point(x, y, 0);
   }
   else
   {
-    preferences.putBool(PREFERENCES_KEY_DOUBLE_RESET, isDoubleReset); // i.e. false
+    resetStoredCalibration();
+    printCalibrationInfo();
   }
-  */
+  printCalibrationInfo();
   preferences.end();
 }
 
@@ -247,6 +326,7 @@ void handleTouchTimer()
     touchCountDown -= 1;
     if (touchCountDown == 0)
     {
+      resetStoredCalibration();
       ESP.restart();
     }
   }
@@ -256,19 +336,61 @@ void handleTouchTimer()
   nextTouchTimer = millis() + 1000;
 }
 
-void handleTouchStart()
+void handleCalibrationEvent()
 {
-  println("TOUCH");
-  touchStartTime = millis();
-  nextTouchTimer = millis() + 1000; // every second
+  switch (calibrating)
+  {
+  case TOP_LEFT:
+    calibrationTopLeft = touchPoint;
+    calibrating = TOP_RIGHT;
+    break;
+  case TOP_RIGHT:
+    calibrationTopRight = touchPoint;
+    calibrating = BOTTOM_LEFT;
+    break;
+  case BOTTOM_LEFT:
+    calibrationBottomLeft = touchPoint;
+    calibrating = BOTTOM_RIGHT;
+    break;
+  case BOTTOM_RIGHT:
+    calibrationBottomRight = touchPoint;
+    calibrating = 0;
+    calibrated = true;
+    storeCalibration();
+    printCalibrationInfo();
+    break;
+  }
+  displayStatus();
+}
+
+void handleTouchStartEvent()
+{
+  char buffer[64] = "";
   if (screenTimeout == 0)
   {
     // display is off
+    clearDisplay();
     displayOn();
+    displayLogo();
+    delay(1000);
+    displayStatus();
+    sprintf(buffer, "WAKE x:%d y:%d z:%d", touchPoint.x, touchPoint.y, touchPoint.z);
+    println(buffer);
+  }
+  else if (touchStartTime == 0)
+  {
+    sprintf(buffer, "TOUCH x:%d y:%d z:%d", touchPoint.x, touchPoint.y, touchPoint.z);
+    println(buffer);
+    touchStartTime = millis();
+    nextTouchTimer = millis() + 1000; // every second
+    if (calibrating)
+    {
+      handleCalibrationEvent();
+    }
   }
 }
 
-void handleTouchEnd()
+void handleTouchEndEvent()
 {
   println("NO TOUCH");
   updateDisplayLine(RESET_LINE, "");
@@ -440,7 +562,7 @@ void mqttCallback(char *topic, byte *message, unsigned int length)
   {
     strncpy(lastTimeReceived, messageString.c_str(), strlen(messageString.c_str()));
     updateDisplayLine(CLOCK_LINE, lastTimeReceived);
-    print("Time is");
+    print("Time is ");
     println(lastTimeReceived);
   }
 }
@@ -534,6 +656,7 @@ void updateIntercom(int state)
     publishInteger(MQTT_TOPIC_ALERT, 1);
     print("Ringing ");
     println(intercomState);
+    screenTimeout = 0; // Keep screen on while ringing
   }
   else
   {
@@ -544,6 +667,7 @@ void updateIntercom(int state)
     publishInteger(MQTT_TOPIC_ALERT, 0);
     print("Idle ");
     println(intercomState);
+    screenTimeout = millis() + SCREEN_TIMEOUT; // start screen timeout when ringing stops
   }
 }
 
@@ -551,18 +675,24 @@ void setup()
 {
   Serial.begin(115200);
   delay(100);
-  Serial.println("Starting up");
 
   setupPreferences();
   mySPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
-  ts.begin(mySPI);
-  ts.setRotation(orientation);
+  touchscreen.begin(mySPI);
+  touchscreen.setRotation(orientation);
 
   // Start the tft display and set it to black
   tft.init();
   tft.setRotation(orientation); // This is the display in landscape (1 or 3) or portrait (0 or 2)
   tft.setFreeFont(FREE_FONT);
 
+  Serial.println("Starting up");
+  Serial.print("Display: ");
+  Serial.print(String(tft.width()));
+  Serial.print("x");
+  Serial.println(String(tft.height()));
+  displayLogo();
+  delay(3000);
   pinMode(BACKLIGHT_PIN, OUTPUT);
   pinMode(INTERCOM_PIN, INPUT);
 
@@ -573,7 +703,13 @@ void setup()
   server.begin();
   const char *ssid = WiFi.SSID().c_str();
   Serial.printf("SSID %s\n", ssid);
+  if (!calibrated)
+  {
+    calibrating = TOP_LEFT;
+    displayStatus();
+  }
   displayOn();
+  displayStatus();
   Serial.println("Ready.");
 }
 
@@ -592,17 +728,26 @@ void loop()
   }
   mqttClient.loop();
   server.handleClient();
-  currentTouchState = (ts.tirqTouched() && ts.touched());
-  if (lastTouchState == TOUCHED && currentTouchState == UNTOUCHED)
+  if (touchscreen.tirqTouched() && touchscreen.touched())
   {
-    handleTouchEnd();
+    TS_Point reading = touchscreen.getPoint();
+    int16_t xChange = reading.x - touchPoint.x;
+    int16_t yChange = reading.y - touchPoint.y;
+    int16_t zChange = reading.z - touchPoint.z;
+    if (abs(xChange) > 5 || abs(yChange) > 5)
+    {
+      touchPoint = reading;
+      handleTouchStartEvent();
+    }
   }
-  else if (lastTouchState == UNTOUCHED && currentTouchState == TOUCHED)
+  else if (touchPoint.z != 0)
   {
-    handleTouchStart();
+    // touch end event with last value
+    handleTouchEndEvent();
+    // then clear the value
+    touchPoint = TS_Point(0, 0, 0);
   }
-  lastTouchState = currentTouchState;
-  if (now > screenTimeout)
+  if (now > screenTimeout && currentIntercomState == IDLE)
   {
     displayOff();
   }
