@@ -40,6 +40,22 @@
 #define XPT2046_CLK 25  // T_CLK
 #define XPT2046_CS 33   // T_CS
 
+// We can globally disable Serial comms by undefining this
+#define USE_SERIAL
+void print(const char *text)
+{
+#ifdef USE_SERIAL
+  Serial.print(text);
+#endif
+}
+
+void println(const char *text)
+{
+#ifdef USE_SERIAL
+  Serial.println(text);
+#endif
+}
+
 SPIClass mySPI = SPIClass(VSPI);
 XPT2046_Touchscreen touchscreen(XPT2046_CS /*, XPT2046_IRQ*/);
 
@@ -60,7 +76,44 @@ TS_Point calibrationTopRight = UNCALIBRATED;
 TS_Point calibrationBottomLeft = UNCALIBRATED;
 TS_Point calibrationBottomRight = UNCALIBRATED;
 
-#define SCREEN_TIMEOUT 1000 * 30
+#define DISPLAY_OFF 0
+#define DISPLAY_LOGO 1
+#define DISPLAY_STATUS 3
+#define DISPLAY_RINGING 4
+
+#define SCREEN_TIMEOUT 1000 * 10; // 30
+
+// #define FONT_HEIGHT 30
+#define FONT_NUMBER 4 // Use GFXFF to use an Adafruit free font - I like font 4
+#define FREE_FONT FF6 // Only has an effect if FONT_NUMBER is set to GFXFF
+#define FONT_HEIGHT 26
+#define DISPLAY_LINES 8
+
+char lines[DISPLAY_LINES][32];
+char displayed[DISPLAY_LINES][32];
+
+uint8_t displayMode = DISPLAY_OFF;
+
+void clearDisplay()
+{
+  tft.fillScreen(BACKGROUND_COLOUR);
+  tft.setTextColor(TEXT_COLOUR, BACKGROUND_COLOUR);
+  for (uint8_t index = 0; index < DISPLAY_LINES; index += 1)
+  {
+    displayed[index][0] = '\0';
+  }
+}
+
+void setDisplayMode(uint8_t mode)
+{
+  if (mode != displayMode)
+  {
+    displayMode = mode;
+    print("Display mode set to ");
+    println(String(displayMode).c_str());
+    clearDisplay();
+  }
+}
 
 unsigned long screenTimeout = 0;  // 0 or timestamp when last released
 unsigned long touchStartTime = 0; // 0 or timestamp when pressed
@@ -80,37 +133,15 @@ int launchCount = 0;
 bool calibrated = false;
 int calibrating = 0; // The point currently being calibrated or 0
 
-// #define FONT_HEIGHT 30
-#define FONT_NUMBER 4 // Use GFXFF to use an Adafruit free font - I like font 4
-#define FREE_FONT FF6 // Only has an effect if FONT_NUMBER is set to GFXFF
-#define FONT_HEIGHT 26
-#define DISPLAY_LINES 8
-
 #define HOSTNAME_LINE 1
 #define SSID_LINE 2
 #define IP_LINE 3
 #define BROKER_TEXT_LINE 4
 #define BROKER_IP_LINE 5
 #define BROKER_STATUS_LINE 6
-#define RESET_LINE 6
+#define RESET_LINE 7
 #define DING_DONG_LINE 7
 #define CLOCK_LINE 8
-
-// We can globally disable Serial comms by undefining this
-#define USE_SERIAL
-void print(const char *text)
-{
-#ifdef USE_SERIAL
-  Serial.print(text);
-#endif
-}
-
-void println(const char *text)
-{
-#ifdef USE_SERIAL
-  Serial.println(text);
-#endif
-}
 
 WiFiClient wifiClient;               // The Wifi connection
 PubSubClient mqttClient(wifiClient); // The MQTT connection
@@ -120,12 +151,6 @@ int mqttPort = 0;
 const char *MQTT_TOPIC_TIME = "/intercom/time"; // incoming
 const char *MQTT_TOPIC_INFO = "/intercom/info";
 const char *MQTT_TOPIC_ALERT = "/intercom/active";
-
-void clearDisplay()
-{
-  tft.fillScreen(BACKGROUND_COLOUR);
-  tft.setTextColor(TEXT_COLOUR, BACKGROUND_COLOUR);
-}
 
 // Draw the calibration crosshair at TOP_LEFT, BOTTOM_RIGHT etc...
 void drawCrosshair(int position)
@@ -142,59 +167,129 @@ void drawCrosshair(int position)
   tft.drawLine(xMiddle, yStart, xMiddle, yEnd, CROSSHAIR_COLOUR);
 }
 
-void updateDisplayLine(int line, const char *text)
+void displayRinging() {
+  clearDisplay();
+  uint8_t offset = tft.height()/10;
+  tft.setTextFont(GFXFF);
+  tft.setTextColor(TFT_YELLOW);
+  tft.setFreeFont(FSSB24);
+  tft.setTextSize(2);
+  tft.drawCentreString("DING", tft.width() / 2, offset, GFXFF);
+  tft.drawCentreString("DONG", tft.width() / 2, tft.height()/2, GFXFF);
+  tft.setTextSize(1);
+  tft.setFreeFont(NULL);
+  tft.setTextFont(FONT_NUMBER);
+  tft.setTextColor(TEXT_COLOUR);
+}
+
+void displayLogo()
+{
+  clearDisplay();
+  tft.pushImage((tft.width() - LOGO_WIDTH) / 2, 0, LOGO_WIDTH, LOGO_HEIGHT, logo);
+}
+
+void setLineText(int line, const char *text)
+{
+  print("Set line #");
+  print(String(line).c_str());
+  print(" to ");
+  println(text);
+  // Lines start at 1, the array at 0
+  strncpy(lines[line - 1], text, strlen(text));
+  lines[line - 1][strlen(text)] = '\0';
+  for (uint8_t index = 0; index < DISPLAY_LINES; index += 1)
+  {
+    print(String(index + 1).c_str());
+    print(": ");
+    println(lines[index]);
+  }
+}
+
+void drawDisplayLine(int line, const char *text)
 {
   int displayHeight = tft.height();
   int lineHeight = displayHeight / DISPLAY_LINES;
   int gap = lineHeight - FONT_HEIGHT;
   int topGap = gap / 2;
-  int yTop = (line - 1) * lineHeight;
+  int yTop = line * lineHeight;
   int yText = yTop + topGap;
   tft.fillRect(0, yTop, tft.width(), lineHeight, BACKGROUND_COLOUR);
   tft.drawCentreString(text, tft.width() / 2, yText, FONT_NUMBER);
 }
 
 // display the connection info (and cross hair if calibrating)
-void displayStatus()
+void updateDisplay()
 {
-  println("Display status");
+  print("Update Display status: ");
+  switch (displayMode)
+  {
+  case DISPLAY_LOGO:
+    println("Logo");
+    displayLogo();
+    break;
+  case DISPLAY_STATUS:
+    println("Status");
+    for (uint8_t index = 0; index < DISPLAY_LINES; index += 1)
+    {
+      if (strcmp(lines[index], displayed[index]) != 0)
+      {
+        drawDisplayLine(index, lines[index]);
+        strncpy(displayed[index], lines[index], strlen(lines[index]));
+        displayed[index][strlen(lines[index])] = '\0';
+      }
+    }
+    break;
+  case DISPLAY_RINGING:
+    println("Ringing");
+    displayRinging();
+    break;
+  default:
+    println("Nothing");
+    // do nothing
+    break;
+  }
+  /*
   clearDisplay();
-  updateDisplayLine(HOSTNAME_LINE, hostname);
   if (WiFi.status() == WL_CONNECTED)
   {
-    updateDisplayLine(SSID_LINE, WiFi.SSID().c_str());
-    updateDisplayLine(IP_LINE, WiFi.localIP().toString().c_str());
+    setLineText(SSID_LINE, WiFi.SSID().c_str());
+    setLineText(IP_LINE, WiFi.localIP().toString().c_str());
+    drawDisplayLine(SSID_LINE, WiFi.SSID().c_str());
+    drawDisplayLine(IP_LINE, WiFi.localIP().toString().c_str());
   }
   else
   {
-    updateDisplayLine(SSID_LINE, "WiFi not connected");
-    updateDisplayLine(IP_LINE, "Restart to connect");
+    setLineText(SSID_LINE, "WiFi not connected");
+    setLineText(IP_LINE, "Restart to connect");
+    drawDisplayLine(SSID_LINE, "WiFi not connected");
+    drawDisplayLine(IP_LINE, "Restart to connect");
   }
-  updateDisplayLine(BROKER_TEXT_LINE, "MQTT broker:");
+  setLineText(BROKER_TEXT_LINE, "MQTT broker:");
+  drawDisplayLine(BROKER_TEXT_LINE, "MQTT broker:");
   if (mqttClient.connected())
   {
     char buffer[32];
     sprintf(buffer, "%s:%i", mqttBroker, mqttPort);
-    updateDisplayLine(BROKER_IP_LINE, buffer);
+    setLineText(BROKER_IP_LINE, buffer);
+    drawDisplayLine(BROKER_IP_LINE, buffer);
   }
   else
   {
-    updateDisplayLine(BROKER_IP_LINE, "not connected");
+    setLineText(BROKER_IP_LINE, "not connected");
+    drawDisplayLine(BROKER_IP_LINE, "not connected");
   }
-  updateDisplayLine(DING_DONG_LINE, intercomState);
+  setLineText(DING_DONG_LINE, intercomState);
+  drawDisplayLine(DING_DONG_LINE, intercomState);
   println(lastTimeReceived);
-  updateDisplayLine(CLOCK_LINE, lastTimeReceived);
+  setLineText(CLOCK_LINE, lastTimeReceived);
+  drawDisplayLine(CLOCK_LINE, lastTimeReceived);
   if (calibrating)
   {
     drawCrosshair(calibrating);
-    updateDisplayLine(RESET_LINE, "Touch crosshairs!");
+    setLineText(RESET_LINE, "Touch crosshairs!");
+    drawDisplayLine(RESET_LINE, "Touch crosshairs!");
   }
-}
-
-void displayLogo()
-{
-  clearDisplay();
-  tft.pushImage((tft.width() - LOGO_WIDTH)/2, 0, LOGO_WIDTH, LOGO_HEIGHT, logo);
+  */
 }
 
 void displayOn()
@@ -208,6 +303,7 @@ void displayOff()
   digitalWrite(BACKLIGHT_PIN, LOW);
   clearDisplay();
   screenTimeout = 0;
+  setDisplayMode(DISPLAY_OFF);
 }
 
 void printCalibrationInfo()
@@ -288,31 +384,6 @@ void setupPreferences()
   preferences.end();
 }
 
-void handleTime()
-{
-  char buffer[20];
-  sprintf(buffer, "%d", millis());
-  println(buffer);
-  server.send(200, "text/plain", buffer);
-}
-
-void handleColour()
-{
-  println("POST");
-  if (server.hasArg("plain"))
-  {
-    String body = server.arg("plain");
-    print("Arg ");
-    println(body.c_str());
-  }
-  server.send(200, "text/plain", "Thank you.");
-}
-void setupRouting()
-{
-  server.on("/time", handleTime);
-  server.on("/colour", HTTP_POST, handleColour);
-}
-
 int touchCountDown = 0;
 
 void handleTouchTimer()
@@ -332,7 +403,8 @@ void handleTouchTimer()
   }
   char message[32];
   sprintf(message, "Reset in %is", touchCountDown);
-  updateDisplayLine(RESET_LINE, message);
+  setLineText(RESET_LINE, message);
+  updateDisplay();
   nextTouchTimer = millis() + 1000;
 }
 
@@ -360,24 +432,22 @@ void handleCalibrationEvent()
     printCalibrationInfo();
     break;
   }
-  displayStatus();
+  updateDisplay();
 }
 
 void handleTouchStartEvent()
 {
   char buffer[64] = "";
-  if (screenTimeout == 0)
+  if (displayMode == DISPLAY_OFF)
   {
     // display is off
-    clearDisplay();
     displayOn();
-    displayLogo();
-    delay(1000);
-    displayStatus();
+    setDisplayMode(DISPLAY_LOGO);
+    updateDisplay();
     sprintf(buffer, "WAKE x:%d y:%d z:%d", touchPoint.x, touchPoint.y, touchPoint.z);
     println(buffer);
   }
-  else if (touchStartTime == 0)
+  else if (touchStartTime == 0 && displayMode != DISPLAY_LOGO)
   {
     sprintf(buffer, "TOUCH x:%d y:%d z:%d", touchPoint.x, touchPoint.y, touchPoint.z);
     println(buffer);
@@ -392,8 +462,10 @@ void handleTouchStartEvent()
 
 void handleTouchEndEvent()
 {
-  println("NO TOUCH");
-  updateDisplayLine(RESET_LINE, "");
+  setDisplayMode(DISPLAY_STATUS);
+  println("TOUCH END");
+  setLineText(RESET_LINE, "");
+  updateDisplay();
   touchStartTime = 0;
   nextTouchTimer = 0;
   touchCountDown = 0;
@@ -403,9 +475,8 @@ void handleTouchEndEvent()
 // Called on setup or if Wifi connection has been lost
 void setupWifi()
 {
-  clearDisplay();
-  updateDisplayLine(HOSTNAME_LINE, hostname);
-  updateDisplayLine(SSID_LINE, "Connecting to Wifi");
+  setLineText(HOSTNAME_LINE, hostname);
+  setLineText(SSID_LINE, "Connecting to Wifi");
   size_t wifiCredentialCount = sizeof(wifiCredentials) / sizeof(WiFiCredentials);
   for (size_t index = 0; index < wifiCredentialCount; index += 1)
   {
@@ -420,7 +491,8 @@ void setupWifi()
   // Nothing works without Wifi - loop until we are connected
   int wifiFound = -1; // index of the first known network found
   ssid = "Scanning";
-  updateDisplayLine(SSID_LINE + 1, "Scanning for networks");
+  setLineText(SSID_LINE + 1, "Scanning for networks");
+  updateDisplay();
   println("Scanning for networks");
   // How many networks are visible?
   int visibleNetworkCount = WiFi.scanNetworks();
@@ -464,8 +536,9 @@ void setupWifi()
   {
     // We are going to try and connect to this network
     ssid = wifiCredentials[wifiFound].ssid;
-    updateDisplayLine(SSID_LINE + 1, "Trying");
-    updateDisplayLine(SSID_LINE + 2, ssid);
+    setLineText(SSID_LINE + 1, "Trying");
+    setLineText(SSID_LINE + 2, ssid);
+    updateDisplay();
     WiFi.begin(ssid, wifiCredentials[wifiFound].password);
     int attempts = 10; // We attempt only a limited number of times
     // we have a WiFi we can try and connect to
@@ -484,7 +557,17 @@ void setupWifi()
   println(WiFi.localIP().toString().c_str());
   println(WiFi.getHostname());
   // Update the display with SSID and IP address
-  displayStatus();
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    setLineText(SSID_LINE, WiFi.SSID().c_str());
+    setLineText(IP_LINE, WiFi.localIP().toString().c_str());
+  }
+  else
+  {
+    setLineText(SSID_LINE, "WiFi not connected");
+    setLineText(IP_LINE, "Restart to connect");
+  }
+  updateDisplay();
 }
 
 // publish an (long) integer to the MQTT broker
@@ -507,7 +590,7 @@ void publishInteger(const char *topic, long value, bool retain)
   }
   else
   {
-    displayStatus();
+    updateDisplay();
   }
 }
 
@@ -535,7 +618,7 @@ void publishString(const char *topic, char *value, bool retain)
   }
   else
   {
-    displayStatus();
+    updateDisplay();
   }
 }
 
@@ -561,7 +644,8 @@ void mqttCallback(char *topic, byte *message, unsigned int length)
   if (strcmp(topic, MQTT_TOPIC_TIME) == 0)
   {
     strncpy(lastTimeReceived, messageString.c_str(), strlen(messageString.c_str()));
-    updateDisplayLine(CLOCK_LINE, lastTimeReceived);
+    setLineText(CLOCK_LINE, lastTimeReceived);
+    updateDisplay();
     print("Time is ");
     println(lastTimeReceived);
   }
@@ -579,9 +663,10 @@ void setupMQTT()
     // if the client is already connected - do nothing
     if (!mqttClient.connected())
     {
-      updateDisplayLine(BROKER_TEXT_LINE, "MQTT connecting");
-      updateDisplayLine(BROKER_IP_LINE, "");
-      updateDisplayLine(BROKER_STATUS_LINE, "");
+      setLineText(BROKER_TEXT_LINE, "MQTT connecting");
+      setLineText(BROKER_IP_LINE, "");
+      setLineText(BROKER_STATUS_LINE, "");
+      updateDisplay();
       if (strcmp(mqttBrokers[index].ssid, ssid) == 0)
       {
         // broker is on correct network
@@ -600,13 +685,16 @@ void setupMQTT()
         char buffer[64];
         sprintf(buffer, "<%s> <%s>", mqttUsername, mqttPassword);
         println(buffer);
-        updateDisplayLine(BROKER_IP_LINE, (String(mqttBroker) + ":" + String(mqttPort)).c_str());
+        setLineText(BROKER_IP_LINE, (String(mqttBroker) + ":" + String(mqttPort)).c_str());
+        updateDisplay();
         delay(1000);
         // Now try to connect to the MQTT broker
         if (mqttClient.connect(clientId.c_str(), mqttUsername, mqttPassword))
         {
           println("MQTT broker connected");
-          updateDisplayLine(BROKER_STATUS_LINE, "MQTT connected");
+          setLineText(BROKER_TEXT_LINE, "MQTT broker:");
+          setLineText(BROKER_STATUS_LINE, "MQTT connected");
+          updateDisplay();
           // Make sure we publish stuff so they are available in Node Red right away
           publishString(MQTT_TOPIC_INFO, (char *)"Ready");
           mqttClient.setCallback(mqttCallback);
@@ -631,7 +719,8 @@ void setupMQTT()
             break;
           }
           println(buffer);
-          updateDisplayLine(BROKER_STATUS_LINE, buffer);
+          setLineText(BROKER_STATUS_LINE, buffer);
+          updateDisplay();
         }
         delay(2000);
       }
@@ -648,11 +737,13 @@ void updateIntercom(int state)
     char *status = (char *)INTERCOM_RINGING;
     strncpy(intercomState, status, strlen(status));
     intercomState[strlen(status)] = '\0';
-    if (screenTimeout == 0)
+    if (displayMode == DISPLAY_OFF)
     {
       displayOn();
     }
-    updateDisplayLine(DING_DONG_LINE, intercomState);
+    setLineText(DING_DONG_LINE, intercomState);
+    setDisplayMode(DISPLAY_RINGING);
+    updateDisplay();
     publishInteger(MQTT_TOPIC_ALERT, 1);
     print("Ringing ");
     println(intercomState);
@@ -663,12 +754,58 @@ void updateIntercom(int state)
     char *status = (char *)INTERCOM_IDLE;
     strncpy(intercomState, status, strlen(status));
     intercomState[strlen(status)] = '\0';
-    updateDisplayLine(DING_DONG_LINE, intercomState);
+    setLineText(DING_DONG_LINE, intercomState);
+    setDisplayMode(DISPLAY_STATUS);
+    updateDisplay();
     publishInteger(MQTT_TOPIC_ALERT, 0);
     print("Idle ");
     println(intercomState);
     screenTimeout = millis() + SCREEN_TIMEOUT; // start screen timeout when ringing stops
   }
+}
+
+void handleTime()
+{
+  char buffer[20];
+  sprintf(buffer, "%d", millis());
+  println(buffer);
+  server.send(200, "text/plain", buffer);
+}
+
+void handleColour()
+{
+  println("POST");
+  if (server.hasArg("plain"))
+  {
+    String body = server.arg("plain");
+    print("Arg ");
+    println(body.c_str());
+  }
+  server.send(200, "text/plain", "Thank you.");
+}
+
+void handleIntercom()
+{
+  if (server.hasArg("intercom"))
+  {
+    println("DINGDONG");
+    String body = server.arg("intercom");
+    print("Arg ");
+    println(body.c_str());
+    if (strcmp(body.c_str(), "1") == 0) {
+      updateIntercom(RINGING);
+    } else {
+      updateIntercom(IDLE);
+    }
+  }
+  server.send(200, "text/plain", "Thank you.");
+}
+
+void setupRouting()
+{
+  server.on("/time", handleTime);
+  server.on("/colour", HTTP_POST, handleColour);
+  server.on("/intercom", HTTP_POST, handleIntercom);
 }
 
 void setup()
@@ -691,8 +828,10 @@ void setup()
   Serial.print(String(tft.width()));
   Serial.print("x");
   Serial.println(String(tft.height()));
-  displayLogo();
+  setDisplayMode(DISPLAY_LOGO);
+  updateDisplay();
   delay(3000);
+  setDisplayMode(DISPLAY_STATUS);
   pinMode(BACKLIGHT_PIN, OUTPUT);
   pinMode(INTERCOM_PIN, INPUT);
 
@@ -706,10 +845,10 @@ void setup()
   if (!calibrated)
   {
     calibrating = TOP_LEFT;
-    displayStatus();
+    updateDisplay();
   }
   displayOn();
-  displayStatus();
+  updateDisplay();
   Serial.println("Ready.");
 }
 
@@ -747,7 +886,7 @@ void loop()
     // then clear the value
     touchPoint = TS_Point(0, 0, 0);
   }
-  if (now > screenTimeout && currentIntercomState == IDLE)
+  if (now > screenTimeout && currentIntercomState == IDLE && displayMode == DISPLAY_STATUS)
   {
     displayOff();
   }
