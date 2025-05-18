@@ -167,15 +167,16 @@ void drawCrosshair(int position)
   tft.drawLine(xMiddle, yStart, xMiddle, yEnd, CROSSHAIR_COLOUR);
 }
 
-void displayRinging() {
+void displayRinging()
+{
   clearDisplay();
-  uint8_t offset = tft.height()/10;
+  uint8_t offset = tft.height() / 10;
   tft.setTextFont(GFXFF);
   tft.setTextColor(TFT_YELLOW);
   tft.setFreeFont(FSSB24);
   tft.setTextSize(2);
   tft.drawCentreString("DING", tft.width() / 2, offset, GFXFF);
-  tft.drawCentreString("DONG", tft.width() / 2, tft.height()/2, GFXFF);
+  tft.drawCentreString("DONG", tft.width() / 2, tft.height() / 2, GFXFF);
   tft.setTextSize(1);
   tft.setFreeFont(NULL);
   tft.setTextFont(FONT_NUMBER);
@@ -384,92 +385,62 @@ void setupPreferences()
   preferences.end();
 }
 
-int touchCountDown = 0;
-
-void handleTouchTimer()
+// publish an (long) integer to the MQTT broker
+void publishInteger(const char *topic, long value, bool retain)
 {
-  if (touchCountDown == 0)
+  if (mqttClient.connected())
   {
-    touchCountDown = 5;
+    char message[20];
+    sprintf(message, "%d", value);
+    boolean result;
+    result = mqttClient.publish(topic, (const uint8_t *)message, strlen(message), retain);
+    /*
+    print("Publish ");
+    print(topic);
+    print("=");
+    print(message);
+    print(" : ");
+    println(result == true ? "OK" : "FAIL");
+    */
   }
   else
   {
-    touchCountDown -= 1;
-    if (touchCountDown == 0)
-    {
-      resetStoredCalibration();
-      ESP.restart();
-    }
-  }
-  char message[32];
-  sprintf(message, "Reset in %is", touchCountDown);
-  setLineText(RESET_LINE, message);
-  updateDisplay();
-  nextTouchTimer = millis() + 1000;
-}
-
-void handleCalibrationEvent()
-{
-  switch (calibrating)
-  {
-  case TOP_LEFT:
-    calibrationTopLeft = touchPoint;
-    calibrating = TOP_RIGHT;
-    break;
-  case TOP_RIGHT:
-    calibrationTopRight = touchPoint;
-    calibrating = BOTTOM_LEFT;
-    break;
-  case BOTTOM_LEFT:
-    calibrationBottomLeft = touchPoint;
-    calibrating = BOTTOM_RIGHT;
-    break;
-  case BOTTOM_RIGHT:
-    calibrationBottomRight = touchPoint;
-    calibrating = 0;
-    calibrated = true;
-    storeCalibration();
-    printCalibrationInfo();
-    break;
-  }
-  updateDisplay();
-}
-
-void handleTouchStartEvent()
-{
-  char buffer[64] = "";
-  if (displayMode == DISPLAY_OFF)
-  {
-    // display is off
-    displayOn();
-    setDisplayMode(DISPLAY_LOGO);
     updateDisplay();
-    sprintf(buffer, "WAKE x:%d y:%d z:%d", touchPoint.x, touchPoint.y, touchPoint.z);
-    println(buffer);
-  }
-  else if (touchStartTime == 0 && displayMode != DISPLAY_LOGO)
-  {
-    sprintf(buffer, "TOUCH x:%d y:%d z:%d", touchPoint.x, touchPoint.y, touchPoint.z);
-    println(buffer);
-    touchStartTime = millis();
-    nextTouchTimer = millis() + 1000; // every second
-    if (calibrating)
-    {
-      handleCalibrationEvent();
-    }
   }
 }
 
-void handleTouchEndEvent()
+// publish an (long) integer to the MQTT broker - default is to retain the value
+void publishInteger(const char *topic, long value)
 {
-  setDisplayMode(DISPLAY_STATUS);
-  println("TOUCH END");
-  setLineText(RESET_LINE, "");
-  updateDisplay();
-  touchStartTime = 0;
-  nextTouchTimer = 0;
-  touchCountDown = 0;
-  screenTimeout = millis() + SCREEN_TIMEOUT;
+  publishInteger(topic, value, true);
+}
+
+// publish a string to the MQTT broker
+void publishString(const char *topic, char *value, bool retain)
+{
+  if (mqttClient.connected())
+  {
+    boolean result;
+    result = mqttClient.publish(topic, (const uint8_t *)value, strlen(value), retain);
+    /*
+    print("Publish ");
+    print(topic);
+    print("=");
+    print(value);
+    print(" : ");
+    println(result == true ? "OK" : "FAIL");
+    */
+  }
+  else
+  {
+    updateDisplay();
+  }
+}
+
+// publish a string to the MQTT broker - default is to retain the value
+void publishString(const char *topic, char *value)
+{
+  publishString(topic, value, true);
 }
 
 // Called on setup or if Wifi connection has been lost
@@ -568,64 +539,6 @@ void setupWifi()
     setLineText(IP_LINE, "Restart to connect");
   }
   updateDisplay();
-}
-
-// publish an (long) integer to the MQTT broker
-void publishInteger(const char *topic, long value, bool retain)
-{
-  if (mqttClient.connected())
-  {
-    char message[20];
-    sprintf(message, "%d", value);
-    boolean result;
-    result = mqttClient.publish(topic, (const uint8_t *)message, strlen(message), retain);
-    /*
-    print("Publish ");
-    print(topic);
-    print("=");
-    print(message);
-    print(" : ");
-    println(result == true ? "OK" : "FAIL");
-    */
-  }
-  else
-  {
-    updateDisplay();
-  }
-}
-
-// publish an (long) integer to the MQTT broker - default is to retain the value
-void publishInteger(const char *topic, long value)
-{
-  publishInteger(topic, value, true);
-}
-
-// publish a string to the MQTT broker
-void publishString(const char *topic, char *value, bool retain)
-{
-  if (mqttClient.connected())
-  {
-    boolean result;
-    result = mqttClient.publish(topic, (const uint8_t *)value, strlen(value), retain);
-    /*
-    print("Publish ");
-    print(topic);
-    print("=");
-    print(value);
-    print(" : ");
-    println(result == true ? "OK" : "FAIL");
-    */
-  }
-  else
-  {
-    updateDisplay();
-  }
-}
-
-// publish a string to the MQTT broker - default is to retain the value
-void publishString(const char *topic, char *value)
-{
-  publishString(topic, value, true);
 }
 
 // called when an MQTT topic we subscribe to gets an update
@@ -765,6 +678,102 @@ void updateIntercom(int state)
   }
 }
 
+int touchCountDown = 0;
+
+void handleTouchTimer()
+{
+  if (touchCountDown == 0)
+  {
+    touchCountDown = 5;
+  }
+  else
+  {
+    touchCountDown -= 1;
+    if (touchCountDown == 0)
+    {
+      resetStoredCalibration();
+      ESP.restart();
+    }
+  }
+  char message[32];
+  sprintf(message, "Reset in %is", touchCountDown);
+  setLineText(RESET_LINE, message);
+  updateDisplay();
+  nextTouchTimer = millis() + 1000;
+}
+
+void handleCalibrationEvent()
+{
+  switch (calibrating)
+  {
+  case TOP_LEFT:
+    calibrationTopLeft = touchPoint;
+    calibrating = TOP_RIGHT;
+    break;
+  case TOP_RIGHT:
+    calibrationTopRight = touchPoint;
+    calibrating = BOTTOM_LEFT;
+    break;
+  case BOTTOM_LEFT:
+    calibrationBottomLeft = touchPoint;
+    calibrating = BOTTOM_RIGHT;
+    break;
+  case BOTTOM_RIGHT:
+    calibrationBottomRight = touchPoint;
+    calibrating = 0;
+    calibrated = true;
+    storeCalibration();
+    printCalibrationInfo();
+    break;
+  }
+  updateDisplay();
+}
+
+void handleTouchStartEvent()
+{
+  if (strncmp(intercomState, INTERCOM_RINGING, strlen(INTERCOM_RINGING)) == 0)
+  {
+    updateIntercom(IDLE);
+  }
+  char buffer[64] = "";
+  if (displayMode == DISPLAY_OFF)
+  {
+    // display is off
+    displayOn();
+    setDisplayMode(DISPLAY_LOGO);
+    updateDisplay();
+    sprintf(buffer, "WAKE x:%d y:%d z:%d", touchPoint.x, touchPoint.y, touchPoint.z);
+    println(buffer);
+  }
+  else if (touchStartTime == 0 && displayMode != DISPLAY_LOGO)
+  {
+    sprintf(buffer, "TOUCH x:%d y:%d z:%d", touchPoint.x, touchPoint.y, touchPoint.z);
+    println(buffer);
+    touchStartTime = millis();
+    nextTouchTimer = millis() + 1000; // every second
+    if (calibrating)
+    {
+      handleCalibrationEvent();
+    }
+  }
+}
+
+void handleTouchEndEvent()
+{
+  setDisplayMode(DISPLAY_STATUS);
+  println("TOUCH END");
+  setLineText(RESET_LINE, "");
+  updateDisplay();
+  touchStartTime = 0;
+  nextTouchTimer = 0;
+  if (touchCountDown > 0 && touchCountDown <= 3)
+  {
+    updateIntercom(RINGING);
+  }
+  touchCountDown = 0;
+  screenTimeout = millis() + SCREEN_TIMEOUT;
+}
+
 void handleTime()
 {
   char buffer[20];
@@ -793,9 +802,12 @@ void handleIntercom()
     String body = server.arg("intercom");
     print("Arg ");
     println(body.c_str());
-    if (strcmp(body.c_str(), "1") == 0) {
+    if (strcmp(body.c_str(), "1") == 0)
+    {
       updateIntercom(RINGING);
-    } else {
+    }
+    else
+    {
       updateIntercom(IDLE);
     }
   }
