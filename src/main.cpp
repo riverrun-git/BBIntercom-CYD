@@ -644,6 +644,7 @@ void mqttCallback(char *topic, byte *message, unsigned int length)
   if (strcmp(topic, MQTT_TOPIC_TIME) == 0)
   {
     strncpy(lastTimeReceived, messageString.c_str(), strlen(messageString.c_str()));
+    lastTimeReceived[strlen(messageString.c_str())] = '\0';
     setLineText(CLOCK_LINE, lastTimeReceived);
     updateDisplay();
     print("Time is ");
@@ -833,7 +834,7 @@ void setup()
   delay(3000);
   setDisplayMode(DISPLAY_STATUS);
   pinMode(BACKLIGHT_PIN, OUTPUT);
-  pinMode(INTERCOM_PIN, INPUT);
+  pinMode(INTERCOM_PIN, INPUT_PULLUP); // Ringing is 0, idle is 1, so we pull up as default
 
   setupWifi();
   setupMQTT();
