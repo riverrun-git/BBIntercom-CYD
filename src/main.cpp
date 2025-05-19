@@ -127,7 +127,7 @@ int currentIntercomState = IDLE;
 Preferences preferences;
 WebServer server(80);
 
-int orientation = 1;
+int orientation = 3;
 
 int launchCount = 0;
 bool calibrated = false;
