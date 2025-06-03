@@ -81,7 +81,7 @@ TS_Point calibrationBottomRight = UNCALIBRATED;
 #define DISPLAY_STATUS 3
 #define DISPLAY_RINGING 4
 
-#define SCREEN_TIMEOUT 1000 * 10; // 30
+#define SCREEN_TIMEOUT 1000 * 60; // 60 seconds sounds reasonable
 
 // #define FONT_HEIGHT 30
 #define FONT_NUMBER 4 // Use GFXFF to use an Adafruit free font - I like font 4
@@ -198,12 +198,15 @@ void setLineText(int line, const char *text)
   // Lines start at 1, the array at 0
   strncpy(lines[line - 1], text, strlen(text));
   lines[line - 1][strlen(text)] = '\0';
+  /*
+  // print lines to serial on every update - for debugging - comment out most of the time
   for (uint8_t index = 0; index < DISPLAY_LINES; index += 1)
   {
     print(String(index + 1).c_str());
     print(": ");
     println(lines[index]);
   }
+  */
 }
 
 void drawDisplayLine(int line, const char *text)
@@ -245,7 +248,7 @@ void updateDisplay()
     displayRinging();
     break;
   default:
-    println("Nothing");
+    println("Display Off");
     // do nothing
     break;
   }
@@ -590,6 +593,7 @@ void setupMQTT()
         const char *mqttPassword = mqttBrokers[index].password;
         mqttClient.setServer(mqttBroker, mqttPort);
         mqttClient.setCallback(mqttCallback);
+        mqttClient.setKeepAlive(120);
         // make up a unique client id
         String clientId = String(hostname) + "-" + String(WiFi.macAddress());
         print("Client ");
