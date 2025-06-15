@@ -64,6 +64,7 @@ TFT_eSPI tft = TFT_eSPI();
 char hostname[32] = "BB Intercom";
 const char *ssid = "Searching"; // displayed as a placeholder while not connected
 char lastTimeReceived[32] = "--:--";
+char uptime[32] = "";
 
 #define INTERCOM_IDLE ""
 #define INTERCOM_RINGING "DING DONG"
@@ -81,7 +82,7 @@ TS_Point calibrationBottomRight = UNCALIBRATED;
 #define DISPLAY_STATUS 3
 #define DISPLAY_RINGING 4
 
-#define SCREEN_TIMEOUT 1000 * 60; // 60 seconds sounds reasonable
+#define SCREEN_TIMEOUT 1000 * 60 * 5; // 5 minutes sounds reasonable
 
 // #define FONT_HEIGHT 30
 #define FONT_NUMBER 4 // Use GFXFF to use an Adafruit free font - I like font 4
@@ -118,6 +119,8 @@ void setDisplayMode(uint8_t mode)
 unsigned long screenTimeout = 0;  // 0 or timestamp when last released
 unsigned long touchStartTime = 0; // 0 or timestamp when pressed
 unsigned long nextTouchTimer = 0; // 0 or or timestamp
+unsigned long uptimeUpdateMillis = 0;
+const long uptimeUpdateInterval = 60000; // every minute
 
 #define IDLE 1
 #define RINGING 0
@@ -133,24 +136,49 @@ int launchCount = 0;
 bool calibrated = false;
 int calibrating = 0; // The point currently being calibrated or 0
 
-#define HOSTNAME_LINE 1
-#define SSID_LINE 2
-#define IP_LINE 3
-#define BROKER_TEXT_LINE 4
-#define BROKER_IP_LINE 5
-#define BROKER_STATUS_LINE 6
-#define RESET_LINE 7
-#define DING_DONG_LINE 7
+#define HOSTNAME_LINE 0
+#define SSID_LINE 1
+#define IP_LINE 2
+#define BROKER_TEXT_LINE 3
+#define BROKER_IP_LINE 4
+#define BROKER_STATUS_LINE 5
+#define RESET_LINE 6
+#define DING_DONG_LINE 6
+#define UPTIME_LINE 7
 #define CLOCK_LINE 8
 
 WiFiClient wifiClient;               // The Wifi connection
 PubSubClient mqttClient(wifiClient); // The MQTT connection
 const char *mqttBroker = "";
 int mqttPort = 0;
+const char *mqttUsername = "";
+const char *mqttPassword = "";
 
 const char *MQTT_TOPIC_TIME = "/intercom/time"; // incoming
 const char *MQTT_TOPIC_INFO = "/intercom/info";
 const char *MQTT_TOPIC_ALERT = "/intercom/active";
+const char *MQTT_TOPIC_UPTIME = "/intercom/uptime";
+
+char uptimeText[32];
+void updateUptimeText(unsigned long milliseconds)
+{
+  unsigned long seconds = milliseconds / 1000;
+  unsigned long minutes = seconds / 60;
+  unsigned long hours = minutes / 60;
+  unsigned long days = hours / 24;
+
+  unsigned long minutes_final = minutes % 60;
+  unsigned long hours_final = hours % 24;
+
+  if (days > 0)
+  {
+    sprintf(uptimeText, "%lud %02lu:%02lu", days, hours_final, minutes_final);
+  }
+  else
+  {
+    sprintf(uptimeText, "%02lu:%02lu", hours_final, minutes_final);
+  }
+}
 
 // Draw the calibration crosshair at TOP_LEFT, BOTTOM_RIGHT etc...
 void drawCrosshair(int position)
@@ -388,9 +416,72 @@ void setupPreferences()
   preferences.end();
 }
 
+// called when an MQTT topic we subscribe to gets an update
+void mqttCallback(char *topic, byte *message, unsigned int length)
+{
+  // Convert the byte* message to a String
+  String messageString;
+  for (int index = 0; index < length; index += 1)
+  {
+    messageString += (char)message[index];
+  }
+  print("Received ");
+  print(topic);
+  print("=");
+  println(messageString.c_str());
+  if (strcmp(topic, MQTT_TOPIC_TIME) == 0)
+  {
+    strncpy(lastTimeReceived, messageString.c_str(), strlen(messageString.c_str()));
+    lastTimeReceived[strlen(messageString.c_str())] = '\0';
+    setLineText(CLOCK_LINE, lastTimeReceived);
+    updateDisplay();
+    print("Time is ");
+    println(lastTimeReceived);
+  }
+}
+
+void connectBroker()
+{
+  String clientId = String(hostname) + "-" + String(WiFi.macAddress());
+  if (mqttClient.connect(clientId.c_str(), mqttUsername, mqttPassword))
+  {
+    println("MQTT broker connected");
+    setLineText(BROKER_TEXT_LINE, "MQTT broker:");
+    setLineText(BROKER_STATUS_LINE, "MQTT connected");
+    mqttClient.setCallback(mqttCallback);
+    mqttClient.subscribe(MQTT_TOPIC_TIME);
+    print("Subscribed to ");
+    println(MQTT_TOPIC_TIME);
+    updateDisplay();
+  }
+  else
+  {
+    char buffer[32];
+    int state = mqttClient.state();
+    switch (state)
+    {
+    case -2:
+      sprintf(buffer, "Failed - Not found");
+      break;
+    case 5:
+      sprintf(buffer, "Failed - Not authorised");
+      break;
+    default:
+      sprintf(buffer, "Failed %i", mqttClient.state());
+      break;
+    }
+    println(buffer);
+    setLineText(BROKER_STATUS_LINE, buffer);
+    updateDisplay();
+  }
+}
 // publish an (long) integer to the MQTT broker
 void publishInteger(const char *topic, long value, bool retain)
 {
+  if (!mqttClient.connected())
+  {
+    connectBroker();
+  }
   if (mqttClient.connected())
   {
     char message[20];
@@ -406,10 +497,6 @@ void publishInteger(const char *topic, long value, bool retain)
     println(result == true ? "OK" : "FAIL");
     */
   }
-  else
-  {
-    updateDisplay();
-  }
 }
 
 // publish an (long) integer to the MQTT broker - default is to retain the value
@@ -421,6 +508,10 @@ void publishInteger(const char *topic, long value)
 // publish a string to the MQTT broker
 void publishString(const char *topic, char *value, bool retain)
 {
+  if (!mqttClient.connected())
+  {
+    connectBroker();
+  }
   if (mqttClient.connected())
   {
     boolean result;
@@ -433,10 +524,6 @@ void publishString(const char *topic, char *value, bool retain)
     print(" : ");
     println(result == true ? "OK" : "FAIL");
     */
-  }
-  else
-  {
-    updateDisplay();
   }
 }
 
@@ -544,30 +631,6 @@ void setupWifi()
   updateDisplay();
 }
 
-// called when an MQTT topic we subscribe to gets an update
-void mqttCallback(char *topic, byte *message, unsigned int length)
-{
-  // Convert the byte* message to a String
-  String messageString;
-  for (int index = 0; index < length; index += 1)
-  {
-    messageString += (char)message[index];
-  }
-  print("Received ");
-  print(topic);
-  print("=");
-  println(messageString.c_str());
-  if (strcmp(topic, MQTT_TOPIC_TIME) == 0)
-  {
-    strncpy(lastTimeReceived, messageString.c_str(), strlen(messageString.c_str()));
-    lastTimeReceived[strlen(messageString.c_str())] = '\0';
-    setLineText(CLOCK_LINE, lastTimeReceived);
-    updateDisplay();
-    print("Time is ");
-    println(lastTimeReceived);
-  }
-}
-
 // Setup the MQTT connection to the broker
 void setupMQTT()
 {
@@ -589,8 +652,8 @@ void setupMQTT()
         // broker is on correct network
         mqttBroker = mqttBrokers[index].host;
         mqttPort = mqttBrokers[index].port;
-        const char *mqttUsername = mqttBrokers[index].username;
-        const char *mqttPassword = mqttBrokers[index].password;
+        mqttUsername = mqttBrokers[index].username;
+        mqttPassword = mqttBrokers[index].password;
         mqttClient.setServer(mqttBroker, mqttPort);
         mqttClient.setCallback(mqttCallback);
         mqttClient.setKeepAlive(120);
@@ -607,38 +670,11 @@ void setupMQTT()
         updateDisplay();
         delay(1000);
         // Now try to connect to the MQTT broker
-        if (mqttClient.connect(clientId.c_str(), mqttUsername, mqttPassword))
+        connectBroker();
+        if (mqttClient.connected())
         {
-          println("MQTT broker connected");
-          setLineText(BROKER_TEXT_LINE, "MQTT broker:");
-          setLineText(BROKER_STATUS_LINE, "MQTT connected");
-          updateDisplay();
           // Make sure we publish stuff so they are available in Node Red right away
           publishString(MQTT_TOPIC_INFO, (char *)"Ready");
-          mqttClient.setCallback(mqttCallback);
-          mqttClient.subscribe(MQTT_TOPIC_TIME);
-          print("Subscribed to ");
-          println(MQTT_TOPIC_TIME);
-        }
-        else
-        {
-          char buffer[32];
-          int state = mqttClient.state();
-          switch (state)
-          {
-          case -2:
-            sprintf(buffer, "Failed - Not found");
-            break;
-          case 5:
-            sprintf(buffer, "Failed - Not authorised");
-            break;
-          default:
-            sprintf(buffer, "Failed %i", mqttClient.state());
-            break;
-          }
-          println(buffer);
-          setLineText(BROKER_STATUS_LINE, buffer);
-          updateDisplay();
         }
         delay(2000);
       }
@@ -881,6 +917,16 @@ void loop()
   if (nextTouchTimer > 0 && now > nextTouchTimer)
   {
     handleTouchTimer();
+  }
+  if (now > uptimeUpdateMillis + uptimeUpdateInterval)
+  {
+    uptimeUpdateMillis += uptimeUpdateInterval;
+    updateUptimeText(uptimeUpdateMillis);
+    char uptimeDisplayText[32] = "";
+    sprintf(uptimeDisplayText, "Uptime: %s", uptimeText);
+    setLineText(UPTIME_LINE, uptimeDisplayText);
+    publishString(MQTT_TOPIC_UPTIME, uptimeText);
+    updateDisplay();
   }
   mqttClient.loop();
   server.handleClient();
