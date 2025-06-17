@@ -154,9 +154,9 @@ int mqttPort = 0;
 const char *mqttUsername = "";
 const char *mqttPassword = "";
 
-const char *MQTT_TOPIC_TIME = "/intercom/time"; // incoming
-const char *MQTT_TOPIC_INFO = "/intercom/info";
 const char *MQTT_TOPIC_ALERT = "/intercom/active";
+const char *MQTT_TOPIC_INFO = "/intercom/info";
+const char *MQTT_TOPIC_TIME = "/intercom/time"; // incoming
 const char *MQTT_TOPIC_UPTIME = "/intercom/uptime";
 
 char uptimeText[32];
@@ -170,14 +170,7 @@ void updateUptimeText(unsigned long milliseconds)
   unsigned long minutes_final = minutes % 60;
   unsigned long hours_final = hours % 24;
 
-  if (days > 0)
-  {
-    sprintf(uptimeText, "%lud %02lu:%02lu", days, hours_final, minutes_final);
-  }
-  else
-  {
-    sprintf(uptimeText, "%02lu:%02lu", hours_final, minutes_final);
-  }
+  sprintf(uptimeText, "%lud %02lu:%02lu", days, hours_final, minutes_final);
 }
 
 // Draw the calibration crosshair at TOP_LEFT, BOTTOM_RIGHT etc...
@@ -280,48 +273,6 @@ void updateDisplay()
     // do nothing
     break;
   }
-  /*
-  clearDisplay();
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    setLineText(SSID_LINE, WiFi.SSID().c_str());
-    setLineText(IP_LINE, WiFi.localIP().toString().c_str());
-    drawDisplayLine(SSID_LINE, WiFi.SSID().c_str());
-    drawDisplayLine(IP_LINE, WiFi.localIP().toString().c_str());
-  }
-  else
-  {
-    setLineText(SSID_LINE, "WiFi not connected");
-    setLineText(IP_LINE, "Restart to connect");
-    drawDisplayLine(SSID_LINE, "WiFi not connected");
-    drawDisplayLine(IP_LINE, "Restart to connect");
-  }
-  setLineText(BROKER_TEXT_LINE, "MQTT broker:");
-  drawDisplayLine(BROKER_TEXT_LINE, "MQTT broker:");
-  if (mqttClient.connected())
-  {
-    char buffer[32];
-    sprintf(buffer, "%s:%i", mqttBroker, mqttPort);
-    setLineText(BROKER_IP_LINE, buffer);
-    drawDisplayLine(BROKER_IP_LINE, buffer);
-  }
-  else
-  {
-    setLineText(BROKER_IP_LINE, "not connected");
-    drawDisplayLine(BROKER_IP_LINE, "not connected");
-  }
-  setLineText(DING_DONG_LINE, intercomState);
-  drawDisplayLine(DING_DONG_LINE, intercomState);
-  println(lastTimeReceived);
-  setLineText(CLOCK_LINE, lastTimeReceived);
-  drawDisplayLine(CLOCK_LINE, lastTimeReceived);
-  if (calibrating)
-  {
-    drawCrosshair(calibrating);
-    setLineText(RESET_LINE, "Touch crosshairs!");
-    drawDisplayLine(RESET_LINE, "Touch crosshairs!");
-  }
-  */
 }
 
 void displayOn()
@@ -674,7 +625,7 @@ void setupMQTT()
         if (mqttClient.connected())
         {
           // Make sure we publish stuff so they are available in Node Red right away
-          publishString(MQTT_TOPIC_INFO, (char *)"Ready");
+          publishString(MQTT_TOPIC_INFO, (char *)WiFi.localIP().toString().c_str());
         }
         delay(2000);
       }
