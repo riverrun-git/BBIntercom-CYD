@@ -82,6 +82,11 @@ TS_Point calibrationBottomRight = UNCALIBRATED;
 #define DISPLAY_STATUS 3
 #define DISPLAY_RINGING 4
 
+#define TOUCH_ACTION_NONE 0
+#define TOUCH_ACTION_RESET 1
+#define TOUCH_ACTION_RING 2
+#define TOUCH_ACTION_RECONNECT 3
+
 #define SCREEN_TIMEOUT 1000 * 60 * 5; // 5 minutes sounds reasonable
 
 // #define FONT_HEIGHT 30
@@ -94,6 +99,7 @@ char lines[DISPLAY_LINES][32];
 char displayed[DISPLAY_LINES][32];
 
 uint8_t displayMode = DISPLAY_OFF;
+uint8_t touchAction = TOUCH_ACTION_NONE;
 
 void clearDisplay()
 {
@@ -136,13 +142,12 @@ int launchCount = 0;
 bool calibrated = false;
 int calibrating = 0; // The point currently being calibrated or 0
 
-#define HOSTNAME_LINE 0
 #define SSID_LINE 1
 #define IP_LINE 2
 #define BROKER_TEXT_LINE 3
 #define BROKER_IP_LINE 4
 #define BROKER_STATUS_LINE 5
-#define RESET_LINE 6
+#define TOUCH_ACTION_LINE 6
 #define DING_DONG_LINE 6
 #define UPTIME_LINE 7
 #define CLOCK_LINE 8
@@ -256,12 +261,16 @@ void updateDisplay()
     println("Status");
     for (uint8_t index = 0; index < DISPLAY_LINES; index += 1)
     {
-      if (strcmp(lines[index], displayed[index]) != 0)
+      if (strcmp(lines[index], displayed[index]) != 0 || calibrating)
       {
         drawDisplayLine(index, lines[index]);
         strncpy(displayed[index], lines[index], strlen(lines[index]));
         displayed[index][strlen(lines[index])] = '\0';
       }
+    }
+    if (calibrating)
+    {
+      drawCrosshair(calibrating);
     }
     break;
   case DISPLAY_RINGING:
@@ -487,7 +496,6 @@ void publishString(const char *topic, char *value)
 // Called on setup or if Wifi connection has been lost
 void setupWifi()
 {
-  setLineText(HOSTNAME_LINE, hostname);
   setLineText(SSID_LINE, "Connecting to Wifi");
   size_t wifiCredentialCount = sizeof(wifiCredentials) / sizeof(WiFiCredentials);
   for (size_t index = 0; index < wifiCredentialCount; index += 1)
@@ -635,8 +643,8 @@ void setupMQTT()
 
 void updateIntercom(int state)
 {
-  print("Intercom state");
-  Serial.println(state);
+  print("Intercom state ");
+  Serial.println(state == RINGING ? "Ringing" : "Idle");
   if (state == RINGING)
   {
     char *status = (char *)INTERCOM_RINGING;
@@ -676,19 +684,39 @@ void handleTouchTimer()
   if (touchCountDown == 0)
   {
     touchCountDown = 5;
+    println("In 5");
   }
   else
   {
+    char buffer[16];
     touchCountDown -= 1;
+    sprintf(buffer, "Minus one = %d", touchCountDown);
+    println(buffer);
     if (touchCountDown == 0)
     {
-      resetStoredCalibration();
-      ESP.restart();
+      switch (touchAction)
+      {
+      case TOUCH_ACTION_RESET:
+        resetStoredCalibration();
+        ESP.restart();
+        break;
+      case TOUCH_ACTION_RING:
+        updateIntercom(RINGING);
+        break;
+      }
     }
   }
-  char message[32];
-  sprintf(message, "Reset in %is", touchCountDown);
-  setLineText(RESET_LINE, message);
+  char message[32] = "Do nothing";
+  switch (touchAction)
+  {
+  case TOUCH_ACTION_RESET:
+    sprintf(message, "Reset in %ds", touchCountDown);
+    break;
+  case TOUCH_ACTION_RING:
+    sprintf(message, "Ring in %ds", touchCountDown);
+    break;
+  }
+  setLineText(TOUCH_ACTION_LINE, message);
   updateDisplay();
   nextTouchTimer = millis() + 1000;
 }
@@ -715,17 +743,35 @@ void handleCalibrationEvent()
     calibrated = true;
     storeCalibration();
     printCalibrationInfo();
+    clearDisplay();
+    updateDisplay();
     break;
   }
   updateDisplay();
 }
 
+int mapTouchToScreenX(int x)
+{
+  int xTouchMin = (calibrationTopLeft.x + calibrationBottomLeft.x) / 2;
+  int xTouchMax = (calibrationTopRight.x + calibrationBottomRight.x) / 2;
+  int xScreenMin = CROSSHAIR_MARGIN + CROSSHAIR_SIZE / 2;
+  int xScreenMax = tft.width() - CROSSHAIR_MARGIN - CROSSHAIR_SIZE / 2;
+  int mapped = map(x, xTouchMin, xTouchMax, xScreenMin, xScreenMax);
+  return mapped;
+}
+
+int mapTouchToScreenY(int y)
+{
+  int yTouchMin = (calibrationTopLeft.y + calibrationTopRight.y) / 2;
+  int yTouchMax = (calibrationBottomLeft.y + calibrationBottomRight.y) / 2;
+  int yScreenMin = CROSSHAIR_MARGIN + CROSSHAIR_SIZE / 2;
+  int yScreenMax = tft.height() - CROSSHAIR_MARGIN - CROSSHAIR_SIZE / 2;
+  int mapped = map(y, yTouchMin, yTouchMax, yScreenMin, yScreenMax);
+  return mapped;
+}
+
 void handleTouchStartEvent()
 {
-  if (strncmp(intercomState, INTERCOM_RINGING, strlen(INTERCOM_RINGING)) == 0)
-  {
-    updateIntercom(IDLE);
-  }
   char buffer[64] = "";
   if (displayMode == DISPLAY_OFF)
   {
@@ -740,6 +786,28 @@ void handleTouchStartEvent()
   {
     sprintf(buffer, "TOUCH x:%d y:%d z:%d", touchPoint.x, touchPoint.y, touchPoint.z);
     println(buffer);
+    if (calibrated)
+    {
+      int16_t screenX = mapTouchToScreenX(touchPoint.x);
+      int16_t screenY = mapTouchToScreenY(touchPoint.y);
+      int16_t lineHeight = tft.height() / DISPLAY_LINES;
+      int16_t lineTouched = screenY / lineHeight + 1;
+      sprintf(buffer, "SCREEN x:%d y:%d LINE %d", screenX, screenY, lineTouched);
+      println(buffer);
+      switch (lineTouched)
+      {
+      case UPTIME_LINE:
+      case CLOCK_LINE:
+        touchAction = TOUCH_ACTION_RESET;
+        break;
+      case TOUCH_ACTION_LINE:
+        touchAction = TOUCH_ACTION_RING;
+        break;
+      default:
+        touchAction = TOUCH_ACTION_NONE;
+        break;
+      }
+    }
     touchStartTime = millis();
     nextTouchTimer = millis() + 1000; // every second
     if (calibrating)
@@ -751,17 +819,19 @@ void handleTouchStartEvent()
 
 void handleTouchEndEvent()
 {
+  if (strncmp(intercomState, INTERCOM_RINGING, strlen(INTERCOM_RINGING)) == 0)
+  {
+    println("Ringing turned off");
+    updateIntercom(IDLE);
+  }
   setDisplayMode(DISPLAY_STATUS);
   println("TOUCH END");
-  setLineText(RESET_LINE, "");
+  setLineText(TOUCH_ACTION_LINE, "");
   updateDisplay();
   touchStartTime = 0;
   nextTouchTimer = 0;
-  if (touchCountDown > 0 && touchCountDown <= 3)
-  {
-    updateIntercom(RINGING);
-  }
   touchCountDown = 0;
+  touchAction = TOUCH_ACTION_NONE;
   screenTimeout = millis() + SCREEN_TIMEOUT;
 }
 
