@@ -699,6 +699,7 @@ void handleTouchTimer()
       case TOUCH_ACTION_RESTART:
         ESP.restart();
         break;
+      case TOUCH_ACTION_NONE:
       case TOUCH_ACTION_RESET:
         resetStoredCalibration();
         ESP.restart();
@@ -879,12 +880,33 @@ void handleTouchEndEvent()
   screenTimeout = millis() + SCREEN_TIMEOUT;
 }
 
-void handleTime()
+void handleUptime()
 {
   char buffer[20];
-  sprintf(buffer, "%d", millis());
+  sprintf(buffer, "Test\nUptime: %s", uptimeText);
   println(buffer);
   server.send(200, "text/plain", buffer);
+}
+
+void handleRestart()
+{
+  char buffer[20];
+  sprintf(buffer, "Restarting");
+  println(buffer);
+  server.send(200, "text/plain", buffer);
+  delay(2000);
+  ESP.restart();
+}
+
+void handleReset()
+{
+  char buffer[20];
+  sprintf(buffer, "Resetting");
+  println(buffer);
+  server.send(200, "text/plain", buffer);
+  delay(2000);
+  resetStoredCalibration();
+  ESP.restart();
 }
 
 void handleColour()
@@ -919,11 +941,33 @@ void handleIntercom()
   server.send(200, "text/plain", "Thank you.");
 }
 
+void handleWeb()
+{
+  String page = "<!DOCTYPE html> <html>\n";
+  page += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
+  page += "<title>BB Intercom</title>\n";
+  page += "<style></style>\n";
+  page += "</head>\n";
+  page += "<body>\n";
+  for (uint8_t index = 0; index < DISPLAY_LINES; index += 1)
+  {
+    page += "<h1>&nbsp;";
+    page += lines[index];
+    page += "</h1>\n";
+  }
+  page += "</body>\n";
+  page += "</html>\n";
+  server.send(200, "text/html", page);
+}
+
 void setupRouting()
 {
-  server.on("/time", handleTime);
+  server.on("/uptime", handleUptime);
+  server.on("/restart", handleRestart);
+  server.on("/reset", handleReset);
   server.on("/colour", HTTP_POST, handleColour);
   server.on("/intercom", HTTP_POST, handleIntercom);
+  server.on("/", handleWeb);
 }
 
 void setup()
