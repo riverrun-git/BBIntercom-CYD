@@ -83,9 +83,10 @@ TS_Point calibrationBottomRight = UNCALIBRATED;
 #define DISPLAY_RINGING 4
 
 #define TOUCH_ACTION_NONE 0
-#define TOUCH_ACTION_RESET 1
-#define TOUCH_ACTION_RING 2
-#define TOUCH_ACTION_RECONNECT 3
+#define TOUCH_ACTION_RING 1
+#define TOUCH_ACTION_RESTART 2
+#define TOUCH_ACTION_RESET 3
+#define TOUCH_ACTION_RECONNECT 4
 
 #define SCREEN_TIMEOUT 1000 * 60 * 5; // 5 minutes sounds reasonable
 
@@ -147,8 +148,7 @@ int calibrating = 0; // The point currently being calibrated or 0
 #define BROKER_TEXT_LINE 3
 #define BROKER_IP_LINE 4
 #define BROKER_STATUS_LINE 5
-#define TOUCH_ACTION_LINE 6
-#define DING_DONG_LINE 6
+#define INFO_LINE 6
 #define UPTIME_LINE 7
 #define CLOCK_LINE 8
 
@@ -654,7 +654,7 @@ void updateIntercom(int state)
     {
       displayOn();
     }
-    setLineText(DING_DONG_LINE, intercomState);
+    setLineText(INFO_LINE, intercomState);
     setDisplayMode(DISPLAY_RINGING);
     updateDisplay();
     publishInteger(MQTT_TOPIC_ALERT, 1);
@@ -667,7 +667,7 @@ void updateIntercom(int state)
     char *status = (char *)INTERCOM_IDLE;
     strncpy(intercomState, status, strlen(status));
     intercomState[strlen(status)] = '\0';
-    setLineText(DING_DONG_LINE, intercomState);
+    setLineText(INFO_LINE, intercomState);
     setDisplayMode(DISPLAY_STATUS);
     updateDisplay();
     publishInteger(MQTT_TOPIC_ALERT, 0);
@@ -683,7 +683,7 @@ void handleTouchTimer()
 {
   if (touchCountDown == 0)
   {
-    touchCountDown = 5;
+    touchCountDown = 3;
     println("In 5");
   }
   else
@@ -696,6 +696,9 @@ void handleTouchTimer()
     {
       switch (touchAction)
       {
+      case TOUCH_ACTION_RESTART:
+        ESP.restart();
+        break;
       case TOUCH_ACTION_RESET:
         resetStoredCalibration();
         ESP.restart();
@@ -709,6 +712,10 @@ void handleTouchTimer()
   char message[32] = "Do nothing";
   switch (touchAction)
   {
+  case TOUCH_ACTION_RESTART:
+
+    sprintf(message, "Restart in %ds", touchCountDown);
+    break;
   case TOUCH_ACTION_RESET:
     sprintf(message, "Reset in %ds", touchCountDown);
     break;
@@ -716,26 +723,49 @@ void handleTouchTimer()
     sprintf(message, "Ring in %ds", touchCountDown);
     break;
   }
-  setLineText(TOUCH_ACTION_LINE, message);
+  setLineText(INFO_LINE, message);
   updateDisplay();
   nextTouchTimer = millis() + 1000;
 }
 
+void setCalibrationPoint(int point)
+{
+  calibrating = point;
+  char buffer[32];
+  String corner = "";
+  switch (point)
+  {
+  case TOP_LEFT:
+    corner = "top left";
+    break;
+  case TOP_RIGHT:
+    corner = "top right";
+    break;
+  case BOTTOM_LEFT:
+    corner = "bottom left";
+    break;
+  case BOTTOM_RIGHT:
+    corner = "bottom right";
+    break;
+  }
+  sprintf(buffer, "Touch cross %s", corner);
+  setLineText(INFO_LINE, buffer);
+}
 void handleCalibrationEvent()
 {
   switch (calibrating)
   {
   case TOP_LEFT:
     calibrationTopLeft = touchPoint;
-    calibrating = TOP_RIGHT;
+    setCalibrationPoint(TOP_RIGHT);
     break;
   case TOP_RIGHT:
     calibrationTopRight = touchPoint;
-    calibrating = BOTTOM_LEFT;
+    setCalibrationPoint(BOTTOM_LEFT);
     break;
   case BOTTOM_LEFT:
     calibrationBottomLeft = touchPoint;
-    calibrating = BOTTOM_RIGHT;
+    setCalibrationPoint(BOTTOM_RIGHT);
     break;
   case BOTTOM_RIGHT:
     calibrationBottomRight = touchPoint;
@@ -772,6 +802,12 @@ int mapTouchToScreenY(int y)
 
 void handleTouchStartEvent()
 {
+  if (touchAction == TOUCH_ACTION_NONE && strncmp(intercomState, INTERCOM_RINGING, strlen(INTERCOM_RINGING)) == 0)
+  {
+    println("Ringing turned off");
+    updateIntercom(IDLE);
+    setDisplayMode(DISPLAY_STATUS);
+  }
   char buffer[64] = "";
   if (displayMode == DISPLAY_OFF)
   {
@@ -796,11 +832,18 @@ void handleTouchStartEvent()
       println(buffer);
       switch (lineTouched)
       {
+      case SSID_LINE:
+      case IP_LINE:
+      case BROKER_TEXT_LINE:
+      case BROKER_IP_LINE:
+      case BROKER_STATUS_LINE:
+        touchAction = TOUCH_ACTION_RESTART;
+        break;
       case UPTIME_LINE:
       case CLOCK_LINE:
         touchAction = TOUCH_ACTION_RESET;
         break;
-      case TOUCH_ACTION_LINE:
+      case INFO_LINE:
         touchAction = TOUCH_ACTION_RING;
         break;
       default:
@@ -819,14 +862,15 @@ void handleTouchStartEvent()
 
 void handleTouchEndEvent()
 {
-  if (strncmp(intercomState, INTERCOM_RINGING, strlen(INTERCOM_RINGING)) == 0)
-  {
-    println("Ringing turned off");
-    updateIntercom(IDLE);
-  }
-  setDisplayMode(DISPLAY_STATUS);
   println("TOUCH END");
-  setLineText(TOUCH_ACTION_LINE, "");
+  if (!calibrating)
+  {
+    setLineText(INFO_LINE, "");
+  }
+  if (displayMode == DISPLAY_LOGO)
+  {
+    setDisplayMode(DISPLAY_STATUS);
+  }
   updateDisplay();
   touchStartTime = 0;
   nextTouchTimer = 0;
@@ -918,7 +962,7 @@ void setup()
   Serial.printf("SSID %s\n", ssid);
   if (!calibrated)
   {
-    calibrating = TOP_LEFT;
+    setCalibrationPoint(TOP_LEFT);
     updateDisplay();
   }
   displayOn();
@@ -970,7 +1014,7 @@ void loop()
     // then clear the value
     touchPoint = TS_Point(0, 0, 0);
   }
-  if (now > screenTimeout && currentIntercomState == IDLE && displayMode == DISPLAY_STATUS)
+  if (now > screenTimeout && currentIntercomState == IDLE && displayMode == DISPLAY_STATUS && !calibrating)
   {
     displayOff();
   }
