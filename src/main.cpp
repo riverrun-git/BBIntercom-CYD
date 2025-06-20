@@ -883,7 +883,7 @@ void handleTouchEndEvent()
 void handleUptime()
 {
   char buffer[20];
-  sprintf(buffer, "Test\nUptime: %s", uptimeText);
+  sprintf(buffer, "Uptime: %s", uptimeText);
   println(buffer);
   server.send(200, "text/plain", buffer);
 }
@@ -944,7 +944,9 @@ void handleIntercom()
 void handleWeb()
 {
   String page = "<!DOCTYPE html> <html>\n";
-  page += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
+  page += "<head>\n";
+  page += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
+  page += "<meta http-equiv=\"refresh\" content=\"60\">";
   page += "<title>BB Intercom</title>\n";
   page += "<style></style>\n";
   page += "</head>\n";
