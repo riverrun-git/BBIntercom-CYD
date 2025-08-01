@@ -175,7 +175,7 @@ void updateUptimeText(unsigned long milliseconds)
   unsigned long minutes_final = minutes % 60;
   unsigned long hours_final = hours % 24;
 
-  sprintf(uptimeText, "%lud %02lu:%02lu", days, hours_final, minutes_final);
+  sprintf(uptimeText, "%lud %02luh %02lum", days, hours_final, minutes_final);
 }
 
 // Draw the calibration crosshair at TOP_LEFT, BOTTOM_RIGHT etc...
@@ -581,61 +581,94 @@ void setupWifi()
   {
     setLineText(SSID_LINE, WiFi.SSID().c_str());
     setLineText(IP_LINE, WiFi.localIP().toString().c_str());
+    updateDisplay();
   }
   else
   {
     setLineText(SSID_LINE, "WiFi not connected");
-    setLineText(IP_LINE, "Restart to connect");
+    setLineText(IP_LINE, "Restarting to connect");
+    updateDisplay();
+    delay(10*1000);
+    ESP.restart();
   }
-  updateDisplay();
 }
 
 // Setup the MQTT connection to the broker
 void setupMQTT()
 {
+  char buffer[32];
   print("Connecting MQTT to");
   println(ssid);
+  int attemptCounter = 0;
   // Try all known MQTT brokers in turn
   size_t mqttBrokerCount = sizeof(mqttBrokers) / sizeof(MqttBroker);
-  for (int index = 0; index < mqttBrokerCount; index += 1)
+  while (!mqttClient.connected()) // repeat until connected. We so need to be connected.
   {
-    // if the client is already connected - do nothing
+    attemptCounter += 1;
+    if (attemptCounter > 20) {
+      // There is no hope.
+      ESP.restart();
+    }
+    if (attemptCounter > 1)
+    {
+      sprintf(buffer, "MQTT attempt #%d", attemptCounter);
+    }
+    setLineText(INFO_LINE, buffer);
+    for (int index = 0; index < mqttBrokerCount; index += 1)
+    {
+      // if the client is already connected - do nothing
+      if (!mqttClient.connected())
+      {
+        setLineText(BROKER_TEXT_LINE, "MQTT connecting");
+        setLineText(BROKER_IP_LINE, "");
+        setLineText(BROKER_STATUS_LINE, "");
+        updateDisplay();
+        if (strcmp(mqttBrokers[index].ssid, ssid) == 0)
+        {
+          // broker is on correct network
+          mqttBroker = mqttBrokers[index].host;
+          mqttPort = mqttBrokers[index].port;
+          mqttUsername = mqttBrokers[index].username;
+          mqttPassword = mqttBrokers[index].password;
+          mqttClient.setServer(mqttBroker, mqttPort);
+          mqttClient.setCallback(mqttCallback);
+          mqttClient.setKeepAlive(120);
+          // make up a unique client id
+          String clientId = String(hostname) + "-" + String(WiFi.macAddress());
+          print("Client ");
+          println(clientId.c_str());
+          print("Connecting to ");
+          println(mqttBroker);
+          char buffer[64];
+          sprintf(buffer, "<%s> <%s>", mqttUsername, mqttPassword);
+          println(buffer);
+          setLineText(BROKER_IP_LINE, (String(mqttBroker) + ":" + String(mqttPort)).c_str());
+          updateDisplay();
+          delay(1000);
+          // Now try to connect to the MQTT broker
+          connectBroker();
+          if (mqttClient.connected())
+          {
+            // Make sure we publish stuff so they are available in Node Red right away
+            publishString(MQTT_TOPIC_INFO, (char *)WiFi.localIP().toString().c_str());
+          }
+          delay(2000);
+        }
+      }
+    }
     if (!mqttClient.connected())
     {
-      setLineText(BROKER_TEXT_LINE, "MQTT connecting");
+      // All failed - Try again in taht many seconds
+      uint8_t countdown = 10;
       setLineText(BROKER_IP_LINE, "");
       setLineText(BROKER_STATUS_LINE, "");
-      updateDisplay();
-      if (strcmp(mqttBrokers[index].ssid, ssid) == 0)
+      while (countdown > 0)
       {
-        // broker is on correct network
-        mqttBroker = mqttBrokers[index].host;
-        mqttPort = mqttBrokers[index].port;
-        mqttUsername = mqttBrokers[index].username;
-        mqttPassword = mqttBrokers[index].password;
-        mqttClient.setServer(mqttBroker, mqttPort);
-        mqttClient.setCallback(mqttCallback);
-        mqttClient.setKeepAlive(120);
-        // make up a unique client id
-        String clientId = String(hostname) + "-" + String(WiFi.macAddress());
-        print("Client ");
-        println(clientId.c_str());
-        print("Connecting to ");
-        println(mqttBroker);
-        char buffer[64];
-        sprintf(buffer, "<%s> <%s>", mqttUsername, mqttPassword);
-        println(buffer);
-        setLineText(BROKER_IP_LINE, (String(mqttBroker) + ":" + String(mqttPort)).c_str());
+        sprintf(buffer, "Retrying in %ds", countdown);
+        setLineText(INFO_LINE, buffer);
         updateDisplay();
         delay(1000);
-        // Now try to connect to the MQTT broker
-        connectBroker();
-        if (mqttClient.connected())
-        {
-          // Make sure we publish stuff so they are available in Node Red right away
-          publishString(MQTT_TOPIC_INFO, (char *)WiFi.localIP().toString().c_str());
-        }
-        delay(2000);
+        countdown -= 1;
       }
     }
   }
@@ -684,7 +717,7 @@ void handleTouchTimer()
   if (touchCountDown == 0)
   {
     touchCountDown = 3;
-    println("In 5");
+    println("In 3");
   }
   else
   {
