@@ -493,6 +493,100 @@ void publishString(const char *topic, char *value)
   publishString(topic, value, true);
 }
 
+void WiFiEvent(WiFiEvent_t event)
+{
+  Serial.printf("WIFI EVENT %d: ", event);
+
+  switch (event)
+  {
+  case ARDUINO_EVENT_WIFI_READY:
+    Serial.println("WiFi interface ready");
+    break;
+  case ARDUINO_EVENT_WIFI_SCAN_DONE:
+    Serial.println("Completed scan for access points");
+    break;
+  case ARDUINO_EVENT_WIFI_STA_START:
+    Serial.println("WiFi client started");
+    break;
+  case ARDUINO_EVENT_WIFI_STA_STOP:
+    Serial.println("WiFi clients stopped");
+    break;
+  case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+    Serial.println("Connected to access point");
+    break;
+  case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+    Serial.println("Disconnected from WiFi access point");
+    break;
+  case ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE:
+    Serial.println("Authentication mode of access point has changed");
+    break;
+  case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+    Serial.print("Obtained IP address: ");
+    Serial.println(WiFi.localIP());
+    break;
+  case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+    Serial.println("Lost IP address and IP address is reset to 0");
+    break;
+  case ARDUINO_EVENT_WPS_ER_SUCCESS:
+    Serial.println("WiFi Protected Setup (WPS): succeeded in enrollee mode");
+    break;
+  case ARDUINO_EVENT_WPS_ER_FAILED:
+    Serial.println("WiFi Protected Setup (WPS): failed in enrollee mode");
+    break;
+  case ARDUINO_EVENT_WPS_ER_TIMEOUT:
+    Serial.println("WiFi Protected Setup (WPS): timeout in enrollee mode");
+    break;
+  case ARDUINO_EVENT_WPS_ER_PIN:
+    Serial.println("WiFi Protected Setup (WPS): pin code in enrollee mode");
+    break;
+  case ARDUINO_EVENT_WIFI_AP_START:
+    Serial.println("WiFi access point started");
+    break;
+  case ARDUINO_EVENT_WIFI_AP_STOP:
+    Serial.println("WiFi access point  stopped");
+    break;
+  case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+    Serial.println("Client connected");
+    break;
+  case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+    Serial.println("Client disconnected");
+    break;
+  case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+    Serial.println("Assigned IP address to client");
+    break;
+  case ARDUINO_EVENT_WIFI_AP_PROBEREQRECVED:
+    Serial.println("Received probe request");
+    break;
+  case ARDUINO_EVENT_WIFI_AP_GOT_IP6:
+    Serial.println("AP IPv6 is preferred");
+    break;
+  case ARDUINO_EVENT_WIFI_STA_GOT_IP6:
+    Serial.println("STA IPv6 is preferred");
+    break;
+  case ARDUINO_EVENT_ETH_GOT_IP6:
+    Serial.println("Ethernet IPv6 is preferred");
+    break;
+  case ARDUINO_EVENT_ETH_START:
+    Serial.println("Ethernet started");
+    break;
+  case ARDUINO_EVENT_ETH_STOP:
+    Serial.println("Ethernet stopped");
+    break;
+  case ARDUINO_EVENT_ETH_CONNECTED:
+    Serial.println("Ethernet connected");
+    break;
+  case ARDUINO_EVENT_ETH_DISCONNECTED:
+    Serial.println("Ethernet disconnected");
+    break;
+  case ARDUINO_EVENT_ETH_GOT_IP:
+    Serial.println("Obtained IP address");
+    break;
+  default:
+    Serial.println("Other");
+    break;
+  }
+}
+
 // Called on setup or if Wifi connection has been lost
 void setupWifi()
 {
@@ -559,13 +653,21 @@ void setupWifi()
     setLineText(SSID_LINE + 1, "Trying");
     setLineText(SSID_LINE + 2, ssid);
     updateDisplay();
+    print("Connecting to SSID: \"");
+    print(ssid);
+    print("\" with password \"");
+    print(wifiCredentials[wifiFound].password);
+    println("\"");
     WiFi.begin(ssid, wifiCredentials[wifiFound].password);
-    int attempts = 10; // We attempt only a limited number of times
+    uint8_t attemptsRemaining = 30; // We attempt only a limited number of times - 30 seconds
     // we have a WiFi we can try and connect to
-    while (WiFi.status() != WL_CONNECTED && attempts > 0)
+    while (WiFi.status() != WL_CONNECTED && attemptsRemaining > 0)
     {
-      attempts -= 1;
-      delay(500);
+      char buffer[32];
+      sprintf(buffer, "Waiting %d seconds", attemptsRemaining);
+      println(buffer);
+      attemptsRemaining -= 1;
+      delay(1000);
     }
     wifiConnected = WiFi.status() == WL_CONNECTED;
     // If the Wifi is not connected we start the search all over again
@@ -605,7 +707,8 @@ void setupMQTT()
   while (!mqttClient.connected()) // repeat until connected. We so need to be connected.
   {
     attemptCounter += 1;
-    if (attemptCounter > 20) {
+    if (attemptCounter > 20)
+    {
       // There is no hope.
       ESP.restart();
     }
@@ -658,7 +761,7 @@ void setupMQTT()
     }
     if (!mqttClient.connected())
     {
-      // All failed - Try again in taht many seconds
+      // All failed - Try again in that many seconds
       uint8_t countdown = 10;
       setLineText(BROKER_IP_LINE, "");
       setLineText(BROKER_STATUS_LINE, "");
@@ -1032,6 +1135,7 @@ void setup()
   pinMode(BACKLIGHT_PIN, OUTPUT);
   pinMode(INTERCOM_PIN, INPUT_PULLUP); // Ringing is 0, idle is 1, so we pull up as default
 
+  WiFi.onEvent(WiFiEvent);
   setupWifi();
   setupMQTT();
   // Now we set the double reset flag to true
