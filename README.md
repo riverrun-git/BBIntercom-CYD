@@ -5,13 +5,14 @@
 This project runs on an ESP32 (PlatformIO env `esp32dev`) and implements a simple intercom display with touch, MQTT integration and a tiny HTTP control server.
 
 ## At-a-glance
+- Device used: ESP32-2432S028 [Cheap Yellow Display](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display) 
 - MCU: ESP32 (PlatformIO environment `esp32dev`)
 - Display: TFT (TFT_eSPI) with XPT2046 touch controller
 - Network: WiFi (scans configured SSIDs), MQTT (PubSubClient)
 - Web: small HTTP server on port 80 with a few endpoints
 
 ## Key files
-- `platformio.ini` — build environment, pinned libraries and `-include` of `include/User_Setup.h`.
+<!-- - `platformio.ini` — build environment, pinned libraries and `-include` of `include/User_Setup.h`. -->
 - `src/main.cpp` — entire application logic (WiFi, MQTT, display, touch, HTTP routes).
 - `include/User_Setup.h` — TFT driver, pins, fonts and SPI settings used by `TFT_eSPI`.
 - `include/constants.h` — app constants and Preferences keys (namespace `BBI_PREFS`).
