@@ -400,11 +400,15 @@ void mqttCallback(char *topic, byte *message, unsigned int length)
   }
 }
 
+uint16_t connectBrokerCounter = 0;
+
 void connectBroker()
 {
+  connectBrokerCounter += 1;
   String clientId = String(hostname) + "-" + String(WiFi.macAddress());
   if (mqttClient.connect(clientId.c_str(), mqttUsername, mqttPassword))
   {
+    connectBrokerCounter = 0;
     println("MQTT broker connected");
     setLineText(BROKER_TEXT_LINE, "MQTT broker:");
     setLineText(BROKER_STATUS_LINE, "MQTT connected");
@@ -421,10 +425,10 @@ void connectBroker()
     switch (state)
     {
     case -2:
-      sprintf(buffer, "Failed - Not found");
+      sprintf(buffer, "Not found #%i", connectBrokerCounter);
       break;
     case 5:
-      sprintf(buffer, "Failed - Not authorised");
+      sprintf(buffer, "Not authorised #%i", connectBrokerCounter);
       break;
     default:
       sprintf(buffer, "Failed %i", mqttClient.state());
@@ -433,6 +437,12 @@ void connectBroker()
     println(buffer);
     setLineText(BROKER_STATUS_LINE, buffer);
     updateDisplay();
+    if (connectBrokerCounter > 15)
+    {
+      // We publish one uptime message every minute
+      // so after 15 failed attempts (minutes) we restart
+      ESP.restart();
+    }
   }
 }
 // publish an (long) integer to the MQTT broker
@@ -659,13 +669,15 @@ void setupWifi()
     print(wifiCredentials[wifiFound].password);
     println("\"");
     WiFi.begin(ssid, wifiCredentials[wifiFound].password);
-    uint8_t attemptsRemaining = 30; // We attempt only a limited number of times - 30 seconds
+    uint8_t attemptsRemaining = 15; // We attempt only a limited number of times - 15 seconds
     // we have a WiFi we can try and connect to
     while (WiFi.status() != WL_CONNECTED && attemptsRemaining > 0)
     {
       char buffer[32];
-      sprintf(buffer, "Waiting %d seconds", attemptsRemaining);
+      sprintf(buffer, "Waiting for %d seconds", attemptsRemaining);
       println(buffer);
+      setLineText(SSID_LINE + 3, buffer);
+      updateDisplay();
       attemptsRemaining -= 1;
       delay(1000);
     }
@@ -687,10 +699,19 @@ void setupWifi()
   }
   else
   {
-    setLineText(SSID_LINE, "WiFi not connected");
-    setLineText(IP_LINE, "Restarting to connect");
+    clearDisplay();
     updateDisplay();
-    delay(10*1000);
+    setLineText(SSID_LINE, "WiFi not connected");
+    uint8_t countdown = 120;
+    while (countdown > 0)
+    {
+      char buffer[32];
+      sprintf(buffer, "Restarting in %ds", countdown);
+      setLineText(IP_LINE, buffer);
+      updateDisplay();
+      delay(1000);
+      countdown -= 1;
+    }
     ESP.restart();
   }
 }
